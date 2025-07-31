@@ -1,0 +1,51 @@
+# serverless.yml
+service: netsuite-etl-service
+
+plugins:
+  - serverless-s3-sync
+  - serverless-plugin-resource-tagging
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: ${file(config/config.${opt:stage, 'dev'}.json):region}
+  stage: ${opt:stage, 'dev'}
+  deploymentBucket:
+    name: ${file(config/config.${opt:stage, 'dev'}.json):deploymentBucket}
+
+
+  vpc:
+    securityGroupIds:
+      - ${file(config/config.${self:provider.stage}.json):vpcSecurityGroupId}
+    subnetIds:
+      - ${file(config/config.${self:provider.stage}.json):vpcSubnetId1}
+      - ${file(config/config.${self:provider.stage}.json):vpcSubnetId2}
+
+
+  iam:
+    role:
+      statements:
+        - Effect: "Allow"
+          Action:
+            - "glue:StartJobRun"
+          Resource: !GetAtt NetsuiteTransactionEtlJob.Arn
+
+        - Effect: "Allow"
+          Action:
+            - "ec2:CreateNetworkInterface"
+            - "ec2:DescribeNetworkInterfaces"
+            - "ec2:DeleteNetworkInterface"
+          Resource: "*"
+
+custom:
+  stage: ${self:provider.stage}
+  config: ${file(config/config.${self:custom.stage}.json)}
+  s3Sync:
+    - bucketName: !Ref GlueAssetsBucket
+      localDir: assets
+
+functions:
+  - ${file(cloudformation/functions.yml)}
+
+resources:
+  - ${file(cloudformation/resources.yml)}

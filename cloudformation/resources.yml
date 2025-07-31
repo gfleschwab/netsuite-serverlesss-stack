@@ -1,0 +1,84 @@
+# cloudformation/resources.yml
+Resources:
+
+  GlueAssetsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: ${self:custom.config.assetBucketName}
+
+  GlueJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: NetSuiteGlueJobRole-${self:custom.stage}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: [glue.amazonaws.com] }
+            Action: [sts:AssumeRole]
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: GlueJobCustomPermissions-${self:custom.stage}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: "Allow"
+                Action: ["s3:GetObject"]
+                Resource:
+                  - "arn:aws:s3:::${self:custom.config.assetBucketName}/scripts/netsuite2-historical-load.py"
+                  - "arn:aws:s3:::${self:custom.config.jdbcDriverBucketName}/Boomi_Test_Mode/Foltz/netsuite/NQjc.jar"
+              - Effect: "Allow"
+                Action: ["s3:PutObject", "s3:DeleteObject"]
+                Resource: "arn:aws:s3:::${self:custom.config.outputBucketName}/*"
+              - Effect: "Allow"
+                Action: ["s3:ListBucket"]
+                Resource: "arn:aws:s3:::${self:custom.config.outputBucketName}"
+              - Effect: "Allow"
+                Action: ["secretsmanager:GetSecretValue"]
+                Resource: "arn:aws:secretsmanager:${self:provider.region}:${aws:accountId}:secret:${self:custom.config.secretName}-*"
+
+              - Effect: "Allow"
+                Action:
+                  - "ec2:CreateNetworkInterface"
+                  - "ec2:DescribeNetworkInterfaces"
+                  - "ec2:DeleteNetworkInterface"
+                  - "ec2:AssignPrivateIpAddresses"
+                  - "ec2:UnassignPrivateIpAddresses"
+                Resource: "*"
+
+  GlueConnection:
+    Type: AWS::Glue::Connection
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      ConnectionInput:
+        Name: netsuite-connection-${self:custom.stage}
+        ConnectionType: "NETWORK"
+        PhysicalConnectionRequirements:
+          SubnetId: ${self:custom.config.vpcSubnetId1}
+          SecurityGroupIdList:
+            - ${self:custom.config.vpcSecurityGroupId}
+          AvailabilityZone: ${self:provider.region}a
+
+  NetsuiteTransactionEtlJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: ${self:custom.config.glueJobName}
+      Role: !GetAtt GlueJobRole.Arn
+      Command:
+        Name: glueetl
+        ScriptLocation: "s3://${self:custom.config.assetBucketName}/scripts/netsuite2-historical-load.py"
+        PythonVersion: "3"
+      GlueVersion: "4.0"
+      WorkerType: "G.1X"
+      NumberOfWorkers: 10
+      ExecutionClass: "FLEX"
+      Connections:
+        Connections:
+          - !Ref GlueConnection
+      DefaultArguments:
+        "--TempDir": "s3://${self:custom.config.outputBucketName}/temporary/"
+        "--job-language": "python"
+        "--extra-jars": "s3://${self:custom.config.jdbcDriverBucketName}/Boomi_Test_Mode/Foltz/netsuite/NQjc.jar"
+        "--enable-metrics": ""
+        "--secret_name": ${self:custom.config.secretName}

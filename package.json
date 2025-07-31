@@ -1,0 +1,19 @@
+{
+  "name": "aws-glue-template",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@aws-sdk/client-glue": "^3.855.0"
+  },
+  "devDependencies": {
+    "serverless": "3.39",
+    "serverless-plugin-resource-tagging": "^1.2.0",
+    "serverless-s3-sync": "^3.4.0"
+  }
+}
