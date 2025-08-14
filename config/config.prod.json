@@ -5,7 +5,7 @@
     "assetBucketName": "ls-glue-assets-prod-bucket",
     "jdbcDriverBucketName": "ls-boomi-stage-preprod",
     "outputBucketName": "ls-snowflake-etl-preprod",
-    "secretName": "prod/netsuite/jdbc/secret",
+    "secretName": "prod/netsuite/suiteql/secret",
     "vpcSecurityGroupId": "sg-0e49c295dc5075d7f",
     "vpcSubnetId1": "subnet-099e7e852426b8f9f",
     "vpcSubnetId2": "subnet-070695ab0ae0d9a8b",

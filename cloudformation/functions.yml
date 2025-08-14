@@ -1,11 +1,10 @@
 # cloudformation/functions.yml
 triggerNetsuiteEtl:
   handler: handler.handler
-  description: "Triggers the NetSuite ETL Glue job to process the previous month's data."
+  description: "Triggers the NetSuite ETL Glue job to process a single day's data."
   environment:
     GLUE_JOB_NAME: ${self:custom.config.glueJobName}
     SECRET_NAME: ${self:custom.config.secretName}
-  # It triggers at 8 AM UTC first day each month.
-  # For the historical load, we will trigger it manually.
-  events:
-    - schedule: cron(0 8 1 * ? *)
+  tags:
+    Portfolio Owner: Integrations
+    Support Group: Baufest

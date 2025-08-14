@@ -1,4 +1,3 @@
-# serverless.yml
 service: netsuite-etl-service
 
 plugins:
@@ -7,12 +6,11 @@ plugins:
 
 provider:
   name: aws
-  runtime: nodejs20.x
+  runtime: python3.9
   region: ${file(config/config.${opt:stage, 'dev'}.json):region}
   stage: ${opt:stage, 'dev'}
   deploymentBucket:
     name: ${file(config/config.${opt:stage, 'dev'}.json):deploymentBucket}
-
 
   vpc:
     securityGroupIds:
@@ -21,31 +19,65 @@ provider:
       - ${file(config/config.${self:provider.stage}.json):vpcSubnetId1}
       - ${file(config/config.${self:provider.stage}.json):vpcSubnetId2}
 
-
   iam:
     role:
       statements:
         - Effect: "Allow"
           Action:
             - "glue:StartJobRun"
-          Resource: !GetAtt NetsuiteTransactionEtlJob.Arn
-
+            - "glue:GetJobRun"
+          Resource: "arn:aws:glue:${self:provider.region}:${aws:accountId}:job/${self:custom.config.glueJobName}"
         - Effect: "Allow"
           Action:
             - "ec2:CreateNetworkInterface"
             - "ec2:DescribeNetworkInterfaces"
             - "ec2:DeleteNetworkInterface"
           Resource: "*"
+        - Effect: "Allow"
+          Action:
+            - "lambda:InvokeFunction"
+          Resource:
+            - "arn:aws:lambda:${self:provider.region}:${aws:accountId}:function:${self:service}-${self:provider.stage}-*"
+        - Effect: "Allow"
+          Action:
+            - "states:CreateStateMachine"
+            - "states:UpdateStateMachine"
+            - "states:StartExecution"
+            - "states:DescribeExecution"
+            - "states:StopExecution"
+          Resource: "arn:aws:states:${self:provider.region}:${aws:accountId}:stateMachine:${self:service}-${self:provider.stage}-*"
+
+package:
+  individually: true
 
 custom:
   stage: ${self:provider.stage}
   config: ${file(config/config.${self:custom.stage}.json)}
   s3Sync:
-    - bucketName: !Ref GlueAssetsBucket
+    - bucketName: ${self:custom.config.assetBucketName}
       localDir: assets
-
+  
 functions:
-  - ${file(cloudformation/functions.yml)}
+  dateGenerator:
+    handler: dateGeneratorHandler.handler
+    description: "Generates a list of daily date ranges for a historical load."
+    runtime: nodejs18.x
+    environment:
+      GLUE_JOB_NAME: ${self:custom.config.glueJobName}
+      SECRET_NAME: ${self:custom.config.secretName}
+    tags:
+      Portfolio Owner: Integrations
+      Support Group: Baufest
+  triggerNetsuiteEtl:
+    handler: handler.handler
+    description: "Triggers the NetSuite ETL Glue job to process a single day's data."
+    runtime: nodejs18.x
+    environment:
+      GLUE_JOB_NAME: ${self:custom.config.glueJobName}
+      SECRET_NAME: ${self:custom.config.secretName}
+    tags:
+      Portfolio Owner: Integrations
+      Support Group: Baufest
 
 resources:
   - ${file(cloudformation/resources.yml)}

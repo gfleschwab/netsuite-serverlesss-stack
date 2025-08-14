@@ -1,0 +1,10 @@
+# cloudformation/date-generator-function.yml
+dateGenerator:
+  handler: dateGeneratorHandler.handler
+  description: "Generates a list of daily date ranges for a historical load."
+  environment:
+    GLUE_JOB_NAME: ${self:custom.config.glueJobName}
+    SECRET_NAME: ${self:custom.config.secretName}
+  tags:
+    Portfolio Owner: Integrations
+    Support Group: Baufest
