@@ -4,5 +4,25 @@ node_modules
 coverage
 jspm_packages
 
+# Python
+__pycache__/
+*.py[cod]
+
 # Serverless directories
 .serverless
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+*_override.tf
+crash.log
+crash.*.log
+# .terraform.lock.hcl is intentionally NOT ignored — it pins provider versions
+# and must be committed.
+
+# Never commit a tfvars carrying secrets
+*.auto.tfvars
+secrets.tfvars

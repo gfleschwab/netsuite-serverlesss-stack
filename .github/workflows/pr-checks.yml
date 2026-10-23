@@ -1,0 +1,49 @@
+# NetSuite ETL — pull request checks
+#
+# Runs on every PR into main. No AWS credentials and no plan against real state:
+# these are the checks that can be made without touching an account, so a PR can
+# be reviewed before anything is deployed. The first real plan happens in the
+# dev job of deploy.yml, after the merge.
+
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Format, validate, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.12.0'
+
+      - name: Terraform format
+        run: make fmt
+
+      - name: Terraform validate
+        run: make validate
+
+      - name: Unit tests
+        run: make test
+
+      # Every stage must parse and carry a real account id, so a typo in one
+      # tfvars is caught here rather than half way through a release.
+      - name: Stage variable files
+        run: |
+          for stage in dev qa preprod prod; do
+            f="terraform/envs/$stage.tfvars"
+            [ -f "$f" ] || { echo "missing $f"; exit 1; }
+            grep -q '^aws_account_id' "$f" || { echo "$f has no aws_account_id"; exit 1; }
+            grep -q '^snowflake_bucket_name' "$f" || { echo "$f has no snowflake_bucket_name"; exit 1; }
+            echo "ok: $f"
+          done

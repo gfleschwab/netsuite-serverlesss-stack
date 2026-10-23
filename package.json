@@ -1,20 +1,8 @@
 {
-  "name": "aws-glue-template",
+  "name": "netsuite-etl",
   "version": "1.0.0",
-  "main": "index.js",
+  "description": "Historical-load Lambda handlers. Packaged by Terraform (terraform/infrastructure/historical-load.tf); the AWS SDK v3 comes with the nodejs20.x runtime.",
   "type": "module",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "author": "",
-  "license": "ISC",
-  "description": "",
-  "dependencies": {
-    "@aws-sdk/client-glue": "^3.855.0"
-  },
-  "devDependencies": {
-    "serverless": "3.39",
-    "serverless-plugin-resource-tagging": "^1.2.0",
-    "serverless-s3-sync": "^3.4.0"
-  }
+  "private": true,
+  "license": "ISC"
 }

@@ -1,0 +1,162 @@
+# NetSuite ETL — deploy
+#
+# One branch, one run per merge. A merge to main walks the stages in order and
+# deploys the same commit to each, so what reaches prod is byte for byte what
+# passed dev and qa. Promotion is a job in this run, not a git operation.
+#
+#   DEV -> QA -> PREPROD -> PROD
+#
+# Each job declares a GitHub Environment. That does two things at once: it
+# records a deployment in the environment's history, and it applies whatever
+# protection rules the environment carries. DEV and QA have none and run
+# straight through; PREPROD and PROD require a reviewer, so the job waits for a
+# human in the Actions UI. There is no separate approval job — one mechanism
+# gates and records, and a reviewer is asked exactly once per stage.
+#
+# NOTE — no push trigger yet, on purpose. This repo used to deploy with
+# Serverless from a CodePipeline that runs on every push to main. Until that
+# pipeline is retired (and the netsuite-etl-service-<stage> CloudFormation
+# stacks it created are removed) this workflow is started by hand from the
+# Actions tab. Once it is gone, add:
+#
+#   push:
+#     branches: [main]
+#
+# ENABLE_PROMOTION keeps everything past DEV switched off. Set the repository
+# variable to 'true' once QA is ready to receive automatic deploys.
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never let two releases apply at once — they would fight over the state lock.
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: '1.12.0'
+  PYTHON_VERSION: '3.12'
+  SUBPROD_STATE_BUCKET: platform-infra-terraform-state-dev
+
+jobs:
+  # ── DEV ─────────────────────────────────────────────────────────────────────
+  # The only job that runs the checks: the same commit goes on to every other
+  # stage, so re-running them would prove nothing new.
+  deploy-dev:
+    name: Deploy to DEV
+    runs-on: ubuntu-latest
+    environment: DEV
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - name: Checks
+        run: |
+          make fmt
+          make validate
+          make test
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.DEV_DEPLOYMENT_ROLE_ARN }}
+          aws-region: us-west-2
+      - name: Apply
+        run: make apply STAGE=dev TFSTATE_BUCKET=${{ env.SUBPROD_STATE_BUCKET }}
+      - name: Summary
+        run: |
+          echo "### DEV deployed" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ── QA ──────────────────────────────────────────────────────────────────────
+  deploy-qa:
+    name: Deploy to QA
+    if: ${{ vars.ENABLE_PROMOTION == 'true' }}
+    needs: [deploy-dev]
+    runs-on: ubuntu-latest
+    environment: QA
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.DEV_DEPLOYMENT_ROLE_ARN }}
+          aws-region: us-west-2
+      - name: Apply
+        run: make apply STAGE=qa TFSTATE_BUCKET=${{ env.SUBPROD_STATE_BUCKET }}
+      - name: Summary
+        run: |
+          echo "### QA deployed" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ── PREPROD ─────────────────────────────────────────────────────────────────
+  # Waits for a reviewer: the PREPROD environment requires one.
+  deploy-preprod:
+    name: Deploy to PREPROD
+    if: ${{ vars.ENABLE_PROMOTION == 'true' }}
+    needs: [deploy-qa]
+    runs-on: ubuntu-latest
+    environment: PREPROD
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.DEV_DEPLOYMENT_ROLE_ARN }}
+          aws-region: us-west-2
+      - name: Apply
+        run: make apply STAGE=preprod TFSTATE_BUCKET=${{ env.SUBPROD_STATE_BUCKET }}
+      - name: Summary
+        run: |
+          echo "### PREPROD deployed" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ── PROD ────────────────────────────────────────────────────────────────────
+  # Separate account (470439681586), its own state bucket and its own role.
+  # Blocked until platform-infra grants netsuite-serverlesss-stack prod OIDC
+  # access in repos.yaml and PROD_DEPLOYMENT_ROLE_ARN exists as a repository
+  # secret.
+  deploy-prod:
+    name: Deploy to PROD
+    if: ${{ vars.ENABLE_PROMOTION == 'true' && vars.ENABLE_PROD == 'true' }}
+    needs: [deploy-preprod]
+    runs-on: ubuntu-latest
+    environment: PROD
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.PROD_DEPLOYMENT_ROLE_ARN }}
+          aws-region: us-west-2
+      - name: Apply
+        run: make apply STAGE=prod TFSTATE_BUCKET=platform-infra-terraform-state-prod
+      - name: Summary
+        run: |
+          echo "### PROD deployed" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY

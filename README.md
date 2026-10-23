@@ -1,101 +1,91 @@
-# Serverless AWS Glue ETL Trigger for NetSuite
+# NetSuite ETL (AWS Glue)
 
-This project provides a serverless, infrastructure-as-code template for extracting data from NetSuite in monthly batches. It uses an AWS Glue ETL job triggered by a scheduled AWS Lambda function. All resources are defined and deployed using the Serverless Framework.
+AWS Glue pipelines that extract NetSuite data through SuiteQL REST and land it in the Snowflake ETL bucket for
+Snowpipe. Infrastructure is Terraform, deployed with GitHub Actions, following the same layout as
+`salesforce-serverless-stack` and `rc015-aws-stack`.
 
------
+| Pipeline | Started by | Code |
+| --- | --- | --- |
+| **FCM310 / FCM311.07 – Customer delta extract** (CHG0032633, replaces the Boomi `CUSTOMERS` driver) | EventBridge Scheduler (FCM310 crons) | `terraform/infrastructure/customer.tf`, `assets/glue-scripts/fcm311-07-netsuite-customer-extract.py` |
+| **Historical load – TransactionLine** (Parquet, one `load_date=` folder per run) | By hand: Step Functions `netsuite-etl-<stage>-historical-load` with `{"startDate", "endDate"}` | `terraform/infrastructure/historical-load.tf`, `assets/glue-scripts/netsuite2-historical-load.py`, `handler.js`, `dateGeneratorHandler.js` |
 
-## 🏛️ Architecture Overview
-
-The pipeline follows a simple, event-driven architecture:
-
-```
-┌──────────────────┐      ┌───────────────┐      ┌───────────────────────────┐
-│ CloudWatch Event │ ──►  │ Lambda        │ ──►  │ AWS Glue Job              │
-│ (Cron Schedule)  │      │ (Orchestrator)│      │ (netsuite-transaction-etl)│
-└──────────────────┘      └───────────────┘      └─┬─────────────────────────┘
-                                                   │
-                                     ┌─────────────▼──────────────┐
-                                     │                            │
-                            ┌────────┴─────────┐         ┌────────┴─────────┐
-                            │ AWS S3           │         │ NetSuite         │
-                            │ (Glue Script/JAR)│         │ (JDBC Source)    │
-                            └──────────────────┘         └──────────────────┘
-                            ┌────────┴─────────┐         ┌────────┴─────────┐
-                            │ Secrets Manager  │         │ AWS S3           │
-                            │ (Credentials)    │         │ (Parquet Output) │
-                            └──────────────────┘         └──────────────────┘
-```
-
------
-
-## ✨ Features
-
-  * **Dynamic Date Batching**: The Lambda function automatically calculates the date range for the previous full month and passes it to the Glue job.
-  * **Infrastructure as Code (IaC)**: All AWS resources (Lambda, Glue, S3, IAM Roles) are defined in `serverless.yml` for repeatable and version-controlled deployments.
-  * **Automated Asset Deployment**: Automatically uploads your Python Glue script and JDBC JAR file to S3 during deployment.
-  * **Secure Credential Management**: Leverages AWS Secrets Manager to securely store and access NetSuite credentials, avoiding hardcoded secrets.
-  * **Least-Privilege IAM Roles**: Creates specific IAM roles for the Lambda and Glue job, ensuring they only have the permissions they need.
-
------
-
-## prerequisites
-
-Before you begin, ensure you have the following installed and configured:
-
-  * [Node.js](https://nodejs.org/en/) (v20.x or later) and npm
-  * [Serverless Framework CLI](https://www.serverless.com/framework/docs/getting-started)
-  * [AWS CLI](https://aws.amazon.com/cli/) with credentials configured in your environment.
-
------
-
-## 📂 Project Structure
+## Architecture
 
 ```
-your-project-root/
-├── assets/
-│   ├── glue-scripts/
-│   │   └── glue_script.py      # Your Python ETL script
-│   └── jdbc-drivers/
-│       └── NQjc.jar            # Your NetSuite JDBC driver
-├── cloudformation/
-│   ├── functions.yml         # Lambda function definitions
-│   └── resources.yml         # AWS resource definitions (Glue, S3, IAM)
-├── config/
-│   └── config.dev.json         # Stage-specific configurations
-├── handler.js                  # Lambda function code
-├── package.json
-├── README.md                   # This file
-└── serverless.yml              # Main serverless configuration
+FCM310 Customer
+  EventBridge Scheduler ──► Step Functions (FCM310) ──► Glue Python shell (FCM311.07) ──► S3 ──► Snowpipe ──► Snowflake
+                                    └─ failures ──► EventBridge rule ──► SNS
+
+Historical load
+  Step Functions ──► Lambda dateGenerator (chunks) ──► Lambda triggerNetsuiteEtl ──► Glue (Spark) ──► S3 Parquet
 ```
 
------
+Both read the NetSuite TBA credentials from the stage's Secrets Manager secret (`<stage>/netsuite/suiteql/secret`,
+owned by operations). Operations for the Customer extract — credentials, cutover, validation, replay and rollback —
+are in [docs/runbooks/FCM310-FCM311.07-customer.md](docs/runbooks/FCM310-FCM311.07-customer.md).
 
-## 🚀 Setup and Deployment
+## Project structure
 
-Follow these steps to configure and deploy the stack.
+```
+assets/glue-scripts/           Glue scripts, uploaded by Terraform to the stage's netsuite-etl-<stage>-glue-scripts bucket
+handler.js, dateGeneratorHandler.js   Historical-load Lambdas (nodejs20.x, ES modules)
+terraform/infrastructure/      Root module: main, variables, data-stores, customer, historical-load, outputs
+terraform/envs/<stage>.tfvars  dev, qa, preprod, prod
+tests/                         Unit tests for the Customer extract script
+docs/runbooks/                 Operations
+makefile                       Entry point for CI and for running by hand
+```
 
-### 1\. Install Dependencies
+## Stages
 
-Install the project dependencies defined in `package.json`.
+| Stage | Account | Snowflake bucket | State bucket |
+| --- | --- | --- | --- |
+| dev | 319580086754 | `ls-snowflake-dev-etl` | `platform-infra-terraform-state-dev` |
+| qa | 319580086754 | `ls-snowflake-qa-etl` | `platform-infra-terraform-state-dev` |
+| preprod | 319580086754 | `ls-snowflake-etl-preprod` | `platform-infra-terraform-state-dev` |
+| prod | 470439681586 | `ls-snowflake-prod-etl` | `platform-infra-terraform-state-prod` |
+
+The state key is `netsuite-etl/<stage>/terraform.tfstate`. The provider pins each stage to the account id in its
+tfvars, so an apply with the wrong credentials fails during plan instead of building a duplicate stack in the wrong
+account.
+
+## Deployment
+
+Prerequisites: Terraform 1.10+, Python 3.12 (unit tests), GNU make, AWS credentials for the stage.
 
 ```bash
-npm install
+make fmt validate test      # the checks CI runs
+make plan STAGE=dev         # see what would change
+make apply STAGE=dev        # plan and apply the saved plan
+make apply STAGE=prod TFSTATE_BUCKET=platform-infra-terraform-state-prod
 ```
 
-### 2\. Place Your Assets
+## CI/CD
 
-1.  Place your Python Glue ETL script into the `assets/glue-scripts/` directory.
-2.  Place your NetSuite JDBC driver (`.jar` file) into the `assets/jdbc-drivers/` directory.
+Two workflows, both driving the same `make` targets:
 
+| Workflow | Trigger | What it does |
+| --- | --- | --- |
+| `.github/workflows/pr-checks.yml` | PR into `main` | `make fmt`, `make validate`, `make test`, and a check that every stage tfvars carries an account id and a Snowflake bucket. No AWS credentials. |
+| `.github/workflows/deploy.yml` | Manual (`workflow_dispatch`) | Deploys one commit through DEV -> QA -> PREPROD -> PROD as sequential jobs. |
 
-### 3\. Deploy the Stack
+Each deploy job declares a GitHub Environment (`DEV`, `QA`, `PREPROD`, `PROD`); PREPROD and PROD require a reviewer.
+Authentication is OIDC (`DEV_DEPLOYMENT_ROLE_ARN`, `PROD_DEPLOYMENT_ROLE_ARN` repository secrets); `platform-infra`
+must list this repository in its `repos.yaml`.
 
-Deploy the entire stack to your AWS account using the Serverless Framework CLI.
+Two repository variables gate the rollout:
 
-```bash
-serverless deploy --stage dev
-```
+- `ENABLE_PROMOTION` — leave unset to stop after DEV. Set to `true` when QA should receive deploys.
+- `ENABLE_PROD` — prod stays off until prod OIDC access and `PROD_DEPLOYMENT_ROLE_ARN` exist.
 
-This command will provision all the AWS resources, create the S3 asset bucket, upload your script and JAR file, and deploy the Lambda function.
+### Migration from Serverless / CodePipeline
 
------
+This repository used to deploy with the Serverless Framework (`netsuite-etl-service-<stage>` CloudFormation stacks)
+from a CodePipeline. The Terraform stack uses new resource names (`netsuite-etl-<stage>-*`), so both can coexist
+while the migration happens:
+
+1. Deploy the Terraform stack to the stage.
+2. Disable the CodePipeline that runs `serverless deploy` for this repository.
+3. Delete the old `netsuite-etl-service-<stage>` CloudFormation stack once nobody runs the old historical-load state
+   machine (`netsuite`).
+4. Add the `push` trigger documented at the top of `deploy.yml`.

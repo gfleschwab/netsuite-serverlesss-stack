@@ -12,7 +12,7 @@ import pandas as pd
 from datetime import datetime
 
 # Parse arguments
-args = getResolvedOptions(sys.argv, ["JOB_NAME", "start_date", "end_date", "secret_name"])
+args = getResolvedOptions(sys.argv, ["JOB_NAME", "start_date", "end_date", "secret_name", "output_path"])
 
 sc = SparkContext()
 glueContext = GlueContext(sc)
@@ -179,7 +179,7 @@ else:
     df = pd.DataFrame(all_records)
     source_dyf = glueContext.create_dynamic_frame.from_pandas(df, name="netsuite_dynamic_frame")
 
-    s3_output_path = f"s3://ls-snowflake-qa-etl/SNOWPIPE/NETSUITE/HISTORICALLOAD/TRANSACTIONLINE/load_date={start_date}/"
+    s3_output_path = f"{args['output_path'].rstrip('/')}/load_date={start_date}/"
     print(f"INFO: Writing data to: {s3_output_path}...")
 
     glueContext.write_dynamic_frame.from_options(
